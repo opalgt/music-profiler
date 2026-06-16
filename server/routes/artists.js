@@ -62,32 +62,74 @@ async function fetchSpotifyById(spotifyId) {
 }
 
 async function fetchLastFm(name) {
-  const res = await axios.get('http://ws.audioscrobbler.com/2.0/', {
-    params: {
-      method: 'artist.getinfo',
-      artist: name,
-      api_key: process.env.LASTFM_API_KEY,
-      format: 'json',
-    },
-  });
+  const params = { artist: name, api_key: process.env.LASTFM_API_KEY, format: 'json' };
 
-  const artist = res.data.artist;
+  const [infoRes, tracksRes] = await Promise.all([
+    axios.get('http://ws.audioscrobbler.com/2.0/', { params: { ...params, method: 'artist.getinfo' } }),
+    axios.get('http://ws.audioscrobbler.com/2.0/', { params: { ...params, method: 'artist.gettoptracks', limit: 10 } }),
+  ]);
+
+  const artist = infoRes.data.artist;
+
   return {
-    tags: artist.tags.tag.map((t) => t.name),
+    tags: artist.tags.tag.map((t) => ({ name: t.name, weight: t.weight ? parseInt(t.weight, 10) : 0 })),
     listeners: parseInt(artist.stats.listeners, 10),
+    playcount: parseInt(artist.stats.playcount, 10),
+    bio: artist.bio.summary.replace(/<a[^>]*>.*?<\/a>/g, '').trim(),
+    similarArtists: artist.similar.artist.map((a) => a.name),
+    topTracks: tracksRes.data.toptracks.track.map((t) => ({
+      name: t.name,
+      playcount: parseInt(t.playcount, 10),
+    })),
   };
 }
 
 async function fetchDiscogs(name) {
-  const res = await axios.get('https://api.discogs.com/database/search', {
+  const authHeader = { Authorization: `Discogs token=${process.env.DISCOGS_TOKEN}` };
+
+  const searchRes = await axios.get('https://api.discogs.com/database/search', {
     params: { q: name, type: 'artist' },
-    headers: { Authorization: `Discogs token=${process.env.DISCOGS_TOKEN}` },
+    headers: authHeader,
   });
 
-  const first = res.data.results[0];
+  const first = searchRes.data.results[0];
   if (!first) return null;
 
-  return { title: first.title, id: first.id };
+  const id = first.id;
+
+  const [artistRes, releasesRes] = await Promise.all([
+    axios.get(`https://api.discogs.com/artists/${id}`, { headers: authHeader }),
+    axios.get(`https://api.discogs.com/artists/${id}/releases`, {
+      params: { sort: 'year', per_page: 50 },
+      headers: authHeader,
+    }),
+  ]);
+
+  const artist = artistRes.data;
+  const releases = releasesRes.data.releases ?? [];
+
+  const labels = [...new Set(releases.map((r) => r.label).filter(Boolean))];
+  const styles = [...new Set(
+    releases
+      .flatMap((r) => [
+        ...(Array.isArray(r.style) ? r.style : r.style ? [r.style] : []),
+        ...(Array.isArray(r.genre) ? r.genre : r.genre ? [r.genre] : []),
+      ])
+      .filter(Boolean)
+  )];
+  const releaseYears = [...new Set(releases.map((r) => r.year).filter((y) => y && y !== 0))].sort((a, b) => a - b);
+
+  return {
+    id,
+    name: artist.name,
+    profile: artist.profile ?? '',
+    nameVariations: artist.namevariations ?? [],
+    totalReleases: releasesRes.data.pagination?.items ?? 0,
+    labels,
+    styles,
+    releaseYears,
+    firstReleaseYear: releaseYears[0] ?? null,
+  };
 }
 
 router.get('/autocomplete', async (req, res) => {
