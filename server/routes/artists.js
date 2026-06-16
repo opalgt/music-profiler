@@ -1,6 +1,7 @@
 import express from 'express';
 import axios from 'axios';
 import dotenv from 'dotenv';
+import { enrichArtist } from './gemini.js';
 
 dotenv.config();
 
@@ -170,11 +171,13 @@ router.get('/search', async (req, res) => {
     fetchDiscogs(name),
   ]);
 
-  res.json({
-    spotify: spotifyResult.status === 'fulfilled' ? spotifyResult.value : { error: spotifyResult.reason?.message },
-    lastfm: lastFmResult.status === 'fulfilled' ? lastFmResult.value : { error: lastFmResult.reason?.message },
-    discogs: discogsResult.status === 'fulfilled' ? discogsResult.value : { error: discogsResult.reason?.message },
-  });
+  const spotify = spotifyResult.status === 'fulfilled' ? spotifyResult.value : { error: spotifyResult.reason?.message };
+  const lastfm = lastFmResult.status === 'fulfilled' ? lastFmResult.value : { error: lastFmResult.reason?.message };
+  const discogs = discogsResult.status === 'fulfilled' ? discogsResult.value : { error: discogsResult.reason?.message };
+
+  const ai = await enrichArtist({ spotify, lastfm, discogs });
+
+  res.json({ spotify, lastfm, discogs, ai });
 });
 
 export default router;
