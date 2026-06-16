@@ -2,6 +2,7 @@ import express from 'express';
 import axios from 'axios';
 import dotenv from 'dotenv';
 import { enrichArtist } from './gemini.js';
+import db from '../db/database.js';
 
 dotenv.config();
 
@@ -157,6 +158,22 @@ router.get('/autocomplete', async (req, res) => {
   }
 });
 
+function buildVector(scores) {
+  const s = scores ?? {};
+  return [
+    s.undergroundScore ?? 0.5,
+    s.energy ?? 0.5,
+    s.danceability ?? 0.5,
+    s.valence ?? 0.5,
+    s.experimentalScore ?? 0.5,
+    s.vocalScore ?? 0.5,
+    s.acousticScore ?? 0.5,
+    s.tempoScore ?? 0.5,
+    s.mainstreamAppeal ?? 0.5,
+    s.longevityScore ?? 0.5,
+  ];
+}
+
 router.get('/search', async (req, res) => {
   const { name, spotifyId } = req.query;
   if (!name) {
@@ -164,6 +181,18 @@ router.get('/search', async (req, res) => {
   }
 
   console.log('[search] received name:', name);
+
+  try {
+    const cached = spotifyId
+      ? db.prepare('SELECT * FROM artists WHERE spotify_id = ?').get(spotifyId)
+      : db.prepare('SELECT * FROM artists WHERE LOWER(name) = LOWER(?)').get(name);
+
+    if (cached) {
+      return res.json({ ...JSON.parse(cached.data), source: 'cache' });
+    }
+  } catch (err) {
+    console.error('[db] cache read error:', err.message);
+  }
 
   const [spotifyResult, lastFmResult, discogsResult] = await Promise.allSettled([
     spotifyId ? fetchSpotifyById(spotifyId) : fetchSpotify(name),
@@ -177,7 +206,20 @@ router.get('/search', async (req, res) => {
 
   const ai = await enrichArtist({ spotify, lastfm, discogs });
 
-  res.json({ spotify, lastfm, discogs, ai });
+  const responseData = { spotify, lastfm, discogs, ai };
+
+  try {
+    const vector = buildVector(ai.scores);
+    const dbSpotifyId = spotifyId || spotify?.id || null;
+    const dbName = spotify?.name || name;
+    db.prepare(
+      'INSERT OR REPLACE INTO artists (spotify_id, name, data, vector) VALUES (?, ?, ?, ?)'
+    ).run(dbSpotifyId, dbName, JSON.stringify(responseData), JSON.stringify(vector));
+  } catch (err) {
+    console.error('[db] cache write error:', err.message);
+  }
+
+  res.json({ ...responseData, source: 'api' });
 });
 
 export default router;
