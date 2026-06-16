@@ -181,12 +181,21 @@ const S = {
     fontSize: '12px',
     fontFamily: 'var(--font-mono)',
   },
+  dimPill: {
+    background: 'transparent',
+    color: 'var(--text-muted)',
+    border: '1px solid var(--border)',
+    borderRadius: '2px',
+    padding: '4px 10px',
+    fontSize: '12px',
+    fontFamily: 'var(--font-mono)',
+  },
   clickablePill: {
     background: 'transparent',
     color: 'var(--text-secondary)',
     border: '1px solid var(--border)',
     borderRadius: '2px',
-    padding: '4px 10px',
+    padding: '6px 14px',
     fontSize: '12px',
     fontFamily: 'var(--font-mono)',
     cursor: 'pointer',
@@ -245,8 +254,8 @@ const S = {
   },
   similarRow: {
     display: 'flex',
+    flexWrap: 'wrap',
     gap: '8px',
-    overflowX: 'auto',
     paddingBottom: '4px',
   },
 };
@@ -258,6 +267,21 @@ const SCORE_KEYS = [
   ['valence', 'valence'],
   ['experimentalScore', 'experimental'],
 ];
+
+function deriveMoodTags(scores) {
+  const tags = [];
+  if (!scores) return tags;
+  if (scores.undergroundScore > 0.7) tags.push('underground');
+  if (scores.energy > 0.7) tags.push('high energy');
+  if (scores.energy < 0.4) tags.push('low key');
+  if (scores.valence < 0.4) tags.push('dark');
+  if (scores.valence > 0.7) tags.push('euphoric');
+  if (scores.experimentalScore > 0.7) tags.push('experimental');
+  if (scores.danceability > 0.7) tags.push('danceable');
+  if (scores.vocalScore < 0.3) tags.push('instrumental');
+  if (scores.acousticScore > 0.6) tags.push('acoustic');
+  return tags;
+}
 
 function ScoreBar({ value, delay }) {
   const [width, setWidth] = useState(0);
@@ -315,12 +339,27 @@ function ArtistCard({ results, onArtistClick }) {
       )}
 
       {/* MOOD TAGS */}
+      {(() => {
+        const moodTags = deriveMoodTags(scores);
+        return moodTags.length > 0 ? (
+          <div style={S.section}>
+            <div style={S.sectionLabel}>Mood</div>
+            <div style={S.pillRow}>
+              {moodTags.map((m) => (
+                <span key={m} style={S.accentPill}>{m}</span>
+              ))}
+            </div>
+          </div>
+        ) : null;
+      })()}
+
+      {/* BEST FOR */}
       {narrative.bestFor?.length > 0 && (
         <div style={S.section}>
-          <div style={S.sectionLabel}>Mood</div>
+          <div style={S.sectionLabel}>Best For</div>
           <div style={S.pillRow}>
             {narrative.bestFor.map((m) => (
-              <span key={m} style={S.accentPill}>{m}</span>
+              <span key={m} style={S.dimPill}>{m}</span>
             ))}
           </div>
         </div>
