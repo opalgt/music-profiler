@@ -2,7 +2,7 @@ import express from 'express';
 import axios from 'axios';
 import dotenv from 'dotenv';
 import { enrichArtist } from './gemini.js';
-import db from '../db/database.js';
+import supabase from '../db/supabase.js';
 
 dotenv.config();
 
@@ -183,12 +183,18 @@ router.get('/search', async (req, res) => {
   console.log('[search] received name:', name);
 
   try {
-    const cached = spotifyId
-      ? db.prepare('SELECT * FROM artists WHERE spotify_id = ?').get(spotifyId)
-      : db.prepare('SELECT * FROM artists WHERE LOWER(name) = LOWER(?)').get(name);
+    const query = spotifyId
+      ? supabase.from('artists').select('*').eq('spotify_id', spotifyId).single()
+      : supabase.from('artists').select('*').ilike('name', name).single();
+
+    const { data: cached } = await query;
 
     if (cached) {
-      return res.json({ ...JSON.parse(cached.data), source: 'cache' });
+      const ageMs = Date.now() - new Date(cached.created_at).getTime();
+      const thirtyDays = 30 * 24 * 60 * 60 * 1000;
+      if (ageMs < thirtyDays) {
+        return res.json({ ...cached.data, source: 'cache' });
+      }
     }
   } catch (err) {
     console.error('[db] cache read error:', err.message);
@@ -212,9 +218,14 @@ router.get('/search', async (req, res) => {
     const vector = buildVector(ai.scores);
     const dbSpotifyId = spotifyId || spotify?.id || null;
     const dbName = spotify?.name || name;
-    db.prepare(
-      'INSERT OR REPLACE INTO artists (spotify_id, name, data, vector) VALUES (?, ?, ?, ?)'
-    ).run(dbSpotifyId, dbName, JSON.stringify(responseData), JSON.stringify(vector));
+    console.log('[cache write] attempting to save artist:', dbName);
+    console.log('[cache write] spotify_id:', dbSpotifyId);
+    const { data: upsertData, error: upsertError } = await supabase.from('artists').upsert(
+      { spotify_id: dbSpotifyId, name: dbName, data: responseData, vector },
+      { onConflict: 'spotify_id' }
+    );
+    console.log('[cache write] result:', upsertData);
+    console.log('[cache write] error:', upsertError);
   } catch (err) {
     console.error('[db] cache write error:', err.message);
   }

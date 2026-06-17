@@ -1,7 +1,7 @@
 import express from 'express';
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import dotenv from 'dotenv';
-import db from '../db/database.js';
+import supabase from '../db/supabase.js';
 
 dotenv.config();
 
@@ -17,9 +17,14 @@ const VECTOR_KEYS = [
 ];
 
 async function fetchAndCacheArtist(name) {
-  const cached = db.prepare('SELECT * FROM artists WHERE LOWER(name) = LOWER(?)').get(name);
+  const { data: cached } = await supabase
+    .from('artists')
+    .select('*')
+    .ilike('name', name)
+    .single();
+
   if (cached) {
-    return { row: cached, data: JSON.parse(cached.data) };
+    return { row: cached, data: cached.data };
   }
 
   const res = await fetch(
@@ -28,7 +33,12 @@ async function fetchAndCacheArtist(name) {
   if (!res.ok) throw new Error(`Failed to fetch artist "${name}": ${res.status}`);
   const data = await res.json();
 
-  const freshRow = db.prepare('SELECT * FROM artists WHERE LOWER(name) = LOWER(?)').get(name);
+  const { data: freshRow } = await supabase
+    .from('artists')
+    .select('*')
+    .ilike('name', name)
+    .single();
+
   return { row: freshRow, data };
 }
 
@@ -73,7 +83,10 @@ router.post('/analyze', async (req, res) => {
 
   // 2. BUILD THE TASTE VECTOR
   const vectors = fetchResults
-    .map((r) => r.row ? JSON.parse(r.row.vector) : null)
+    .map((r) => {
+      if (!r.row?.vector) return null;
+      return Array.isArray(r.row.vector) ? r.row.vector : JSON.parse(r.row.vector);
+    })
     .filter(Boolean);
 
   if (vectors.length === 0) {
@@ -85,12 +98,15 @@ router.post('/analyze', async (req, res) => {
 
   // 3. FIND SIMILAR ARTISTS FROM DATABASE
   const inputNamesLower = new Set(inputNames.map((n) => n.toLowerCase()));
-  const allStored = db.prepare('SELECT * FROM artists').all();
+  const { data: allStored = [] } = await supabase
+    .from('artists')
+    .select('*')
+    .not('name', 'in', `(${inputNames.map((n) => `"${n}"`).join(',')})`);
 
-  const vectorMatches = allStored
+  const vectorMatches = (allStored ?? [])
     .filter((row) => !inputNamesLower.has(row.name.toLowerCase()))
     .map((row) => {
-      const vec = JSON.parse(row.vector);
+      const vec = Array.isArray(row.vector) ? row.vector : JSON.parse(row.vector);
       return { name: row.name, distance: euclideanDistance(tasteVectorArray, vec) };
     })
     .sort((a, b) => a.distance - b.distance)
